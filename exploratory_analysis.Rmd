@@ -1,16 +1,18 @@
 ---
-title: "TBD"
+title: "Using Craiglist Data to Explain and Predict Rental Prices"
 output:
   html_document:
     df_print: paged
 ---
 
 ```{r message=FALSE, warning=FALSE}
-library(dplyr)
 library(ggplot2)
 library(faraway)
 library(knitr)
+library(lmtest)
+library(MASS)
 library(broom)
+library(dplyr)
 
 set.seed(20200805)
 housing <- read.csv('housing.csv')
@@ -37,7 +39,7 @@ After trimming, the data set includes 17 variables:
 * laundry options  
 * parking options  
 
-The data set contains `r nrow(housing)` observations. This dataset is interesting due to its inclusion of variables representing a rental listing's "features", e.g. are pets allowed, is smoking allowed, does it come furnished, etc, as well as variables that provide context about the listing, such as geographic location and square footage. With this dataset, we can explore questions such as the following:
+The data set contains `r nrow(housing)` observations. This dataset is interesting due to the inclusion of variables representing a rental listing's "features", such as if pets are allowed, is smoking allowed, does it come furnished, etc, as well as variables that provide context about the listing, such as geographic location and square footage. With this dataset, we can explore questions such as:
 
 * Controlling for geographic location and square footage, if a renter is considering getting a pet, how much (if at all) will this increase their expected rent? 
 
@@ -47,24 +49,24 @@ The goal of the model will be understanding how these "features" of a rental pro
 
 # Methods
 
-## Cleaning
+## Data Cleaning
 
-To clean the prepare the data set for analysis, we will perform the following steps:
+To prepare the data set for analysis, we will perform the following steps:
 
-* We remove a few columns from the dataset that represent various Craigslist metadata that we will not use in analysis. These are:
+* We remove a few columns from the dataset that represent Craigslist metadata. These are:
     * ID
     * url
     * region_url
     * image_url
-* We also remove the description data, which includes the text description of the property. This field may include interesting information, but would require parsing of the free-form text field into usable variables, and is beyond the scope of this analysis.  
+* We also remove the description data, which includes a text description of the property. This field may include interesting information, but would require parsing of the free-form text field into usable variables, and is beyond the scope of this analysis.  
 * For similiar reasons, we will remove the lat/long variables  
-* We cast boolean "dummy" variales as factors.
+* We cast the boolean variables as R factors.
 
-We will also filter the dataset to a single region, Jacksonville FL, and remove the region feature. We decided to perform this step after exploring initial models which included `region` as a factor variable (for which there are `r length(levels(as.factor(housing$region)))` levels). This was difficult to manage, and the models violated the equal variance assumption of linear regression. We were not able to solve this issue through transformations. 
+We will also filter the dataset to a single region, Jacksonville FL, and remove the region feature. We decided to perform this step after exploring initial models which included `region` as a factor variable (for which there are `r length(levels(as.factor(housing$region)))` levels). This was difficult to manage, and the candidate models consistently violated the equal variance assumption of linear regression, a problem which we were not able to solve through transformations. 
 
-However, we cannot ignore the effect of location. For example, if we wanted an estimate for how much on-site laundry can increase rent, it is important to remove the effect of location. Maybe listings in rural areas are more likely to have on-site laundry than listings in major cities, such that it would appear that on-site laundry is associated with lower rental price. After controlling for region, we would find that it is in fact associated with higher rental price. 
+However, we cannot ignore the effect of location. For example, if we wanted an estimate for how much on-site laundry may increase rent, it is important to remove the effect of location. Perhaps listings in rural areas are more likely to have on-site laundry than listings in major cities, such that it would appear that on-site laundry is associated with lower rental price. In this hypothetical example, after controlling for region, we may find that on-site laundry is in fact associated with higher rental price. 
 
-Our compromise is to remove the `region` factor, and simply focus the analysis on a single geographic region.
+So, our compromise is to remove the `region` factor, and simply focus the analysis on a single geographic region.
 
 ```{r}
 housing_cleaned <- housing %>%
@@ -112,6 +114,8 @@ with(housing_cleaned, table(laundry_options))
 with(housing_cleaned, table(parking_options))
 ```
 
+We note that the number of observations for individual levels in a factor may be quite inbalanced. We do not see the need to make any additional data cleaning steps at this point however.
+
 Next, we'll examine the numeric columms, of which there are four: the predictors `sqft`, `beds` and `baths`, and the response `price`.
 
 ```{r}
@@ -131,10 +135,9 @@ with(housing_cleaned, table(beds))
 with(housing_cleaned, table(baths))
 ```
 
-It is safe to assume that the listing with 0 beds or baths are "missing" or input errors, so we will remove those observations.
+It is safe to assume that the listing with 0 beds or baths are "missing data" or input errors, so we will remove those observations.
 
-
-```{r}
+```{r message=FALSE, warning=FALSE}
 housing_cleaned <- housing_cleaned %>%
   filter(beds > 0,
          baths > 0)
@@ -150,7 +153,7 @@ summary(housing_cleaned$price)
 
 The distribution of `price` is right-skewed - we'll likely explore transformations in the model fitting stage.
 
-## Correlations
+### Correlations
 
 Now that we've concluded our univariate data analysis and data cleaning, we can begin exploratory analysis into correlations. This will give us an idea of what to expect from our models. Since so many of our predictors are categorical and our response is numeric, we'll make heavy use of boxplots.
 
@@ -195,9 +198,9 @@ We'll consider the following variables the "control" variables:
 * square footage  
 * property type
 
-Geographical location is implicitly controlled for, since our data set includes only listings in Jacksonville, FL. 
+As a reminder, geographical location is implicitly controlled for, since our data set includes only listings in Jacksonville, FL. 
 
-We are less interested in the specific coefficients from these variables - we simply want to make sure we are adjusting for them when analyzing our variables of interest. Since there are so many levels for the `region` factor, we will not print out those coefficeints. 
+We are less interested in the specific coefficients from these variables - we simply want to make sure we are adjusting for them when analyzing our variables of interest. 
 
 ```{r}
 mod_control_variables <- lm(
@@ -211,7 +214,7 @@ mod_control_variables <- lm(
 summary(mod_control_variables)$coefficients
 ```
 
-These coefficient estimates are mostly intuitive and expected. The one surprising result is that the coefficients for `beds` is negative - we can see that the direction of the association between `beds` and `price` flips from postivie to negative when we add `sqfeet` to the model.
+These coefficient estimates are mostly intuitive and expected. The one surprising result is that the coefficient for `beds` is negative - we can see that the direction of the association between `beds` and `price` flips from postivie to negative when we add `sqfeet` to the model.
 
 ```{r}
 summary(lm(price ~ beds, data=housing_cleaned))$coefficients
@@ -225,7 +228,7 @@ This could be caused by collinearity, which we check below.
 vif(mod_control_variables)
 ```
 
-Although `sqfeet` and `beds` are somewhat correlated, the VIF values of ~3 are acceptable, so the flipping of the sign does not appear to be due to collinearity. The below plot shows what is happening.
+Although `sqfeet` and `beds` are somewhat correlated, the VIF values of ~3 are acceptable, so the flipping of the sign does not appear to be due to collinearity. The below plot shows what is actually happening.
 
 ```{r}
 tmp_data_for_plot <- housing_cleaned %>%
@@ -243,15 +246,15 @@ ggplot(tmp_data_for_plot, aes(x=as.factor(beds), y=price)) +
   ggtitle('Price vs. Number of beds, facetted by square foot quintile')
 ```
 
-When we facet the price vs. beds by square foot quintile, we see that the number of beds and price are in fact somewhat negatively correlated *within each quintile*. In other words, adding bedrooms while holding square footage constant decreases the price. This is inuitive, in that the size of each indidivudal bedroom becomes smaller, which devalues the property. 
+When we facet the price vs. beds by square foot quintile, we see that the number of beds and price are in fact somewhat negatively correlated *within each quintile*. In other words, adding bedrooms while holding square footage constant decreases the price. This is somewhat inuitive, in that the size of each indidivudal bedroom becomes smaller, which may devalue the property. 
 
 ## Models - variables of interest
 
-Next we'll add our variables of interest, and confirm that the inclusion of these models is an improvement over a model with only the "control" variables. In practice, we are asking if certain features/amnenities of a rental listing helps predict price, over only the basic property facts such as square footage, number of beds, etc.
+Next we'll add our variables of interest, and confirm that the inclusion of these models is an improvement over a model with only the "control" variables. In practice, we are asking if certain features/amnenities of a rental listing helps explain price, over only the basic property facts such as square footage, number of beds, etc.
 
-We'll compare three models: 1) the "control" model, 2) a "full" model that includes all of the variables available (control + varibles of interest), and 3) the result of applying a backwards stepwise procedure on the "full" model.
+We'll compare three models: 1) the "control" model, 2) a "full" model that includes all of the variables available (control + variables of interest), and 3) the result of applying a backwards stepwise procedure on the "full" model.
 
-WHYUSE ADJUSTED R^2
+Since we are primarily interested in inference and not predictive performance, we'll fit the models on the entire data set and compare them with adjusted $R^2$. Adjusted $R^2$ adjusts for the number of predictors in the model, so it provides some protection against selecting spurious variables. 
 
 ```{r}
 control_model = lm(
@@ -296,17 +299,15 @@ The adjusted $R^2$ values are about equal for the "full" and "selected" models, 
 
 ## Model assumptions check
 
-We'll check for outliers first
+We'll check for outliers first.
 
 ```{r}
 housing_cleaned[cooks.distance(selected_model) > 4/length(housing_cleaned),]
-
 ```
 
 None of the observations are considered influential.
 
-Next we'll check model's Linearity and Constant Variance assumptions
-
+Next we'll check model's Linearity and Constant Variance assumptions.
 
 ```{r}
 plot(fitted(selected_model), resid(selected_model), 
@@ -315,31 +316,27 @@ plot(fitted(selected_model), resid(selected_model),
 abline(h = 0, lwd = 2)
 ```
 
-
 ```{r, message=FALSE, warning=FALSE}
-library(lmtest)
 bptest(selected_model)
 ```
 
-Fitted vs. Residuals Plot looks reasonable but Breusch-Pagan Test rejects Constant Variance.
-Even though the formal test rejects the null hypothesis (Constant Variance), we are working with a relatively large number of observation and we are satisfied that the assumptions hold given the visualizations.
+Fitted vs. Residuals Plot looks reasonable but Breusch-Pagan Test rejects the null hypothesis of constant variance. Although the formal test rejects the null hypothesis, we are working with a relatively large number of observation and we are satisfied that the assumptions hold given the visualizations. Our interpretation is that the null is rejected for a relatively minor deviation, due to our large sample size. 
 
-Next we'll check Normality assumption
+Next we'll check Normality assumption.
 
 ```{r}
 qqnorm(resid(selected_model))
 qqline(resid(selected_model))
 ```
 
-
 ```{r}
 shapiro.test(resid(selected_model))
 ```
 
 Q-Q plot has some tails but looks acceptable. Shapiro test, on the other hand, rejects Normality.
-Like most statistical significance tests, if the sample size is sufficiently large this test may detect even trivial departures from the null hypothesis. Same as above, we trust Q-Q plot and are satisfied with Normality assumtion.
+Again, like most statistical significance tests, if the sample size is sufficiently large this test may detect even trivial departures from the null hypothesis. Same as above, we trust Q-Q plot and are satisfied with Normality assumtion.
 
-Lastly, we'll check whether we could use a better response transformation
+Lastly, we'll check whether we could use a response transformation.
 
 ```{r}
 full_model_no_trans = lm(
@@ -360,7 +357,6 @@ full_model_no_trans = lm(
 ```
 
 ```{r, message=FALSE, warning=FALSE}
-library(MASS)
 boxcox(full_model_no_trans, plotit = TRUE)
 ```
 ```{r}
@@ -379,28 +375,51 @@ full_model_boxcox_trans = lm(
     laundry_options + 
     parking_options, 
   data = housing_cleaned)
+
 selected_model_boxcox_trans = step(full_model_boxcox_trans, direction = "backward", trace=FALSE)
-```
-```{r}
+
+full_mopdel_log = lm(
+  log(price) ~ 
+    type + 
+    sqfeet + 
+    beds + 
+    baths + 
+    cats_allowed + 
+    dogs_allowed + 
+    smoking_allowed + 
+    wheelchair_access + 
+    electric_vehicle_charge + 
+    comes_furnished + 
+    laundry_options + 
+    parking_options, 
+  data = housing_cleaned)
+
 qqnorm(resid(selected_model_boxcox_trans))
 qqline(resid(selected_model_boxcox_trans))
 ```
 
-We can see that boxcox transformation produced model with slightly better Normality.
-We'll continue with log response transformation model because simpler transformation makes our predictor effect analysis easier.
+We can see that boxcox transformation produced a model with slightly better normality. However, we'll continue with log response transformation model because simpler transformation makes our predictor effect analysis easier.
 
 # Results
+
+Below, we will print the model summary output, as well as plot the coefficient estimates in descending order. 
 
 ```{r}
 summary(selected_model)
 ```
 
 ```{r}
+library(broom)
+
 coef_plot_data <- tidy(selected_model) %>%
   mutate(
     ymin = estimate - (qnorm(1 - 0.05 / 2) * std.error),
     ymax = estimate + (qnorm(1 - 0.05 / 2) * std.error)) %>%
   filter(term != '(Intercept)')
+
+coef_plot_data$term <- factor(
+  coef_plot_data$term, 
+  levels = coef_plot_data$term[order(coef_plot_data$estimate)])
 
 ggplot(coef_plot_data, aes(x=term, y=estimate)) + 
   geom_hline(yintercept=0) +  
@@ -411,7 +430,7 @@ ggplot(coef_plot_data, aes(x=term, y=estimate)) +
 
 # Discussion
 
-We have establised that certain "features/amnenties" of a rental listing are significantly associated with price. Knowing this information helps us predict/explain price, beyond knowing the basics such as square footage, number of beds/baths, etc.
+We have established that certain "features/amnenties" of a rental listing are significantly associated with price. Knowing this information helps us predict/explain price, beyond knowing the basics such as square footage, number of beds/baths, etc.
 
 This has numerous practical implications. One is that a property owner/landlord can increase the value of their rental listing (i.e. raise rent) by improvements such as in-unit laundry, improving parking options through a garage or carport etc. They can use the coefficient estimates in a cost/benefit analysis. 
 
@@ -419,4 +438,16 @@ From a renters perspective, they can estimate how much additional rent they woul
 
 The four feature/amnenity variables that are not included in the final model are `dogs_allowed`, `smoking_allowed`, `wheelchair_access`, and `electric_vehicle_charge`. Based on our earlier exploratory analysis, we suspect `dogs_allowed` was not selected due to being fairly collinear with `cats_allowed`, and `electric_vehicle_charge` was not selected due to having only a handful of observations for listings with electric vehicle charges.
 
-### Add more discussion around the variables?
+```{r}
+kable(coef(summary(selected_model))[,1], format = "markdown", col.names = c("Value"))
+```
+
+```{r}
+kable(sort(abs(coef(summary(selected_model))[,1]),decreasing = TRUE), format = "markdown", col.names = c("Absolute Value"))
+```
+
+Exploring the coefficients of the selected model, we see the correlation of variables to housing price. The two tables above show the coefficients and the absolute values of coefficients so we can easily see which variables have the most impact on price. We see that among factor variables, `type` was among the most impactful variables, but the values seem unintuitive. Initially, we might expect houses to be more expensive than lofts, but our model shows lofts having the largest increase in price with a value of `r round(summary(selected_model)$coefficients[5,1],3)` while the `type` value of house is associated with a decrease in price with a coefficient value of `r round(summary(selected_model)$coefficients[4,1],2)`. Looking back at the data, we see that there were only two lofts in our data set while there were many more houses. Additionally, since lofts are generally located in more pricey neighborhoods than a typical house it is not unreasonable to believe that if the type of housing is loft will increase price. This is a situation where our model would benefit from more granular location data.
+
+The furnished factor was the second most impactful factor variable with a value of `r summary(selected_model)$coefficients[12,1]`. Expectedly, a unit that is furnished would be more expensive than one that is not. The type of parking also falls in line with expectations with an attached or detatched garage having coefficient values of `r summary(selected_model)$coefficients[18,1]` and `r round(summary(selected_model)$coefficients[20,1],2)` while having only street parking available brought down prices with a coefficient value of `r round(summary(selected_model)$coefficients[23,1],2)`. 
+
+Laundry options also generally follow expectations with an in unit laundry having a positive coefficient of `r round(summary(selected_model)$coefficients[17,1],2)` while having laundry facilities on site or in the building had negative coefficients of `r round(summary(selected_model)$coefficients[13,1],2)` and `r round(summary(selected_model)$coefficients[14,1],2)`.
