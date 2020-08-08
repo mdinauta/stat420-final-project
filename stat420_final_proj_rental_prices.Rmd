@@ -1,9 +1,12 @@
 ---
-title: "Using Craiglist Data to Explain and Predict Rental Prices"
+title: "Using Craiglist Data to Explain Differences in Rental Prices"
+author: 'Matthew DiNauta, Evgenia Resin, Calvin Kim'
 output:
   html_document:
     df_print: paged
 ---
+
+
 
 ```{r message=FALSE, warning=FALSE}
 library(ggplot2)
@@ -193,6 +196,7 @@ Judging by the bivariate correlations only (without "controlling" for any other 
 As a reminder, our goal in this analysis is to estimate the mean change in expected rental price when a rental property has certain amenities (e.g. in-unit laundry) or allowances, such as dogs. To understand the association of an amnenity such as "in-unit laundry", it will be important to "control for" things like location, square footage, and beds/baths. 
 
 We'll consider the following variables the "control" variables:  
+
 * beds  
 * baths  
 * square footage  
@@ -224,7 +228,6 @@ summary(lm(price ~ beds + sqfeet, data=housing_cleaned))$coefficients
 This could be caused by collinearity, which we check below.
 
 ```{r}
-
 vif(mod_control_variables)
 ```
 
@@ -250,9 +253,9 @@ When we facet the price vs. beds by square foot quintile, we see that the number
 
 ## Models - variables of interest
 
-Next we'll add our variables of interest, and confirm that the inclusion of these models is an improvement over a model with only the "control" variables. In practice, we are asking if certain features/amnenities of a rental listing helps explain price, over only the basic property facts such as square footage, number of beds, etc.
+Next we'll add our variables of interest, and confirm that the inclusion of these variables is an improvement over a model with only the "control" variables. In practice, we are asking if certain features/amnenities of a rental listing help explain price, as opposed to knowing only the basic property facts such as square footage, number of beds, etc.
 
-We'll compare three models: 1) the "control" model, 2) a "full" model that includes all of the variables available (control + variables of interest), and 3) the result of applying a backwards stepwise procedure on the "full" model.
+We'll compare three models: 1) the "control" model, 2) a "full" model that includes all of the variables available (control + variables of interest), and 3) the result of applying a backwards stepwise procedure on the "full" model. Given that the our price response is clearly right-skewed, we will apply a log transformation to it.  
 
 Since we are primarily interested in inference and not predictive performance, we'll fit the models on the entire data set and compare them with adjusted $R^2$. Adjusted $R^2$ adjusts for the number of predictors in the model, so it provides some protection against selecting spurious variables. 
 
@@ -304,10 +307,9 @@ We'll check for outliers first.
 ```{r}
 housing_cleaned[cooks.distance(selected_model) > 4/length(housing_cleaned),]
 ```
-
 None of the observations are considered influential.
 
-Next we'll check model's Linearity and Constant Variance assumptions.
+Next we'll check model's linearity and constant variance assumptions.
 
 ```{r}
 plot(fitted(selected_model), resid(selected_model), 
@@ -320,9 +322,9 @@ abline(h = 0, lwd = 2)
 bptest(selected_model)
 ```
 
-Fitted vs. Residuals Plot looks reasonable but Breusch-Pagan Test rejects the null hypothesis of constant variance. Although the formal test rejects the null hypothesis, we are working with a relatively large number of observation and we are satisfied that the assumptions hold given the visualizations. Our interpretation is that the null is rejected for a relatively minor deviation, due to our large sample size. 
+Fitted vs. Residuals Plot looks reasonable but Breusch-Pagan Test rejects the null hypothesis of constant variance. Although the formal test rejects the null hypothesis, we are working with a relatively large number of observations and we are satisfied that the assumptions hold given the visualizations. Our interpretation is that the null is rejected for a relatively minor deviation, due to our large sample size. 
 
-Next we'll check Normality assumption.
+Next we'll check normality assumption.
 
 ```{r}
 qqnorm(resid(selected_model))
@@ -334,9 +336,7 @@ shapiro.test(resid(selected_model))
 ```
 
 Q-Q plot has some tails but looks acceptable. Shapiro test, on the other hand, rejects Normality.
-Again, like most statistical significance tests, if the sample size is sufficiently large this test may detect even trivial departures from the null hypothesis. Same as above, we trust Q-Q plot and are satisfied with Normality assumtion.
-
-Lastly, we'll check whether we could use a response transformation.
+Again, like most statistical significance tests, if the sample size is sufficiently large this test may detect even trivial departures from the null hypothesis. Same as above, we trust Q-Q plot and are satisfied with normality assumtion. That said, we'll consider whether a box cox transformation is an improvement over the log transformation. 
 
 ```{r}
 full_model_no_trans = lm(
@@ -354,11 +354,10 @@ full_model_no_trans = lm(
     laundry_options + 
     parking_options, 
   data = housing_cleaned)
-```
 
-```{r, message=FALSE, warning=FALSE}
 boxcox(full_model_no_trans, plotit = TRUE)
 ```
+
 ```{r}
 full_model_boxcox_trans = lm(
   (price^-0.6 - 1) / - 0.6 ~ 
@@ -398,7 +397,7 @@ qqnorm(resid(selected_model_boxcox_trans))
 qqline(resid(selected_model_boxcox_trans))
 ```
 
-We can see that boxcox transformation produced a model with slightly better normality. However, we'll continue with log response transformation model because simpler transformation makes our predictor effect analysis easier.
+We can see that boxcox transformation appears to have produced a model with slightly better normality. However, we'll continue with log response transformation model because the difference is small and the simpler transformation will make interpreting our coefficients easier.
 
 # Results
 
@@ -438,16 +437,20 @@ From a renters perspective, they can estimate how much additional rent they woul
 
 The four feature/amnenity variables that are not included in the final model are `dogs_allowed`, `smoking_allowed`, `wheelchair_access`, and `electric_vehicle_charge`. Based on our earlier exploratory analysis, we suspect `dogs_allowed` was not selected due to being fairly collinear with `cats_allowed`, and `electric_vehicle_charge` was not selected due to having only a handful of observations for listings with electric vehicle charges.
 
+As a reminder, we fit our model to the log of price. To interpret the point estimates, we will apply a transformation such that the coefficients can be interpreted as "a one-unit increase in x is associated with a n-*percent* change in mean price".
+
 ```{r}
-kable(coef(summary(selected_model))[,1], format = "markdown", col.names = c("Value"))
+transformed_coef <- (exp(coef(summary(selected_model))[,1]) -1) * 100
+transformed_coef <- transformed_coef[2:length(transformed_coef)]
+kable(transformed_coef, format = "markdown", col.names = c("Value"))
 ```
 
 ```{r}
-kable(sort(abs(coef(summary(selected_model))[,1]),decreasing = TRUE), format = "markdown", col.names = c("Absolute Value"))
+kable(sort(abs(transformed_coef),decreasing = TRUE), format = "markdown", col.names = c("Absolute Value"))
 ```
 
-Exploring the coefficients of the selected model, we see the correlation of variables to housing price. The two tables above show the coefficients and the absolute values of coefficients so we can easily see which variables have the most impact on price. We see that among factor variables, `type` was among the most impactful variables, but the values seem unintuitive. Initially, we might expect houses to be more expensive than lofts, but our model shows lofts having the largest increase in price with a value of `r round(summary(selected_model)$coefficients[5,1],3)` while the `type` value of house is associated with a decrease in price with a coefficient value of `r round(summary(selected_model)$coefficients[4,1],2)`. Looking back at the data, we see that there were only two lofts in our data set while there were many more houses. Additionally, since lofts are generally located in more pricey neighborhoods than a typical house it is not unreasonable to believe that if the type of housing is loft will increase price. This is a situation where our model would benefit from more granular location data.
+Exploring the coefficients of the selected model, we see the correlation of variables to housing price. The two tables above show the transformed coefficients and the absolute values of the transformed coefficients so we can easily see which variables have the most impact on price. We see that among factor variables, `type` was among the most impactful variables, but the values seem unintuitive. Initially, we might expect houses to be more expensive than lofts, but our model shows lofts are associated the largest increase in mean price with a value of `r round(transformed_coef[[4]],3)` percent while the `type` value of house is associated with a decrease in mean price with a coefficient value of `r round(transformed_coef[[3]],3)` percent. Looking back at the data, we see that there were only two lofts in our data set while there were many more houses. Our hypothesis here is that lofts are generally located in more pricey neighborhoods. This is a situation where our model would benefit from more granular location data.
 
-The furnished factor was the second most impactful factor variable with a value of `r summary(selected_model)$coefficients[12,1]`. Expectedly, a unit that is furnished would be more expensive than one that is not. The type of parking also falls in line with expectations with an attached or detatched garage having coefficient values of `r summary(selected_model)$coefficients[18,1]` and `r round(summary(selected_model)$coefficients[20,1],2)` while having only street parking available brought down prices with a coefficient value of `r round(summary(selected_model)$coefficients[23,1],2)`. 
+The furnished factor was the second most impactful factor variable with a transformed coefficient value of `r round(transformed_coef[[11]],2)`. Expectedly, a unit that is furnished would be more expensive than one that is not. The type of parking also falls in line with expectations with an attached or detatched garage having coefficient values of `r round(transformed_coef[[17]],2)` and `r round(transformed_coef[[19]],2)` while having only street parking available brought down prices with a coefficient value of `r round(transformed_coef[[22]],2)`. 
 
-Laundry options also generally follow expectations with an in unit laundry having a positive coefficient of `r round(summary(selected_model)$coefficients[17,1],2)` while having laundry facilities on site or in the building had negative coefficients of `r round(summary(selected_model)$coefficients[13,1],2)` and `r round(summary(selected_model)$coefficients[14,1],2)`.
+Laundry options also generally follow expectations with an in-unit laundry having a positive coefficient of `r round(transformed_coef[[16]],2)` while having laundry facilities on site or in the building had negative coefficients of `r round(transformed_coef[[13]],2)` and `r round(transformed_coef[[12]],2)`.
